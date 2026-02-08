@@ -1,9 +1,9 @@
 const mongoose = require('mongoose');
 
 const moderator_request_schema = new mongoose.Schema({
-    user_id: {
+    pilgrim_id: {
         type: mongoose.Schema.Types.ObjectId,
-        ref: 'User',
+        ref: 'Pilgrim',
         required: true
     },
     status: {

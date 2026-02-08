@@ -62,16 +62,23 @@ User must have `role: 'admin'`.
 ### Approve Moderator Request
 **POST** `/moderator-requests/:id/approve`
 
-**Description**: changes the generic user's role to `moderator`.
+**Description**: Creates a User entry with role `moderator` for the pilgrim and updates the pilgrim's role field.
+
+**Requirements:**
+- Pilgrim must have verified email
 
 **Output (Success 200)**:
 ```json
 {
   "success": true,
-  "message": "User approved as Moderator",
-  "user": "User Name"
+  "message": "Pilgrim approved as Moderator",
+  "user": "Pilgrim Name"
 }
 ```
+
+**Errors**:
+- `400`: Pilgrim email must be verified before approval
+- `404`: Request not found or Pilgrim not found
 
 ### Reject Moderator Request
 **POST** `/moderator-requests/:id/reject`
@@ -92,7 +99,20 @@ User must have `role: 'admin'`.
 {
   "success": true,
   "count": 5,
-  "data": [ ...list_of_requests ]
+  "data": [
+    {
+      "_id": "request_id",
+      "pilgrim_id": {
+        "full_name": "Pilgrim Name",
+        "email": "pilgrim@example.com",
+        "phone_number": "+966500000000",
+        "national_id": "1234567890",
+        "email_verified": true
+      },
+      "status": "pending",
+      "created_at": "2024-01-01T00:00:00.000Z"
+    }
+  ]
 }
 ```
 
@@ -100,7 +120,41 @@ User must have `role: 'admin'`.
 
 ### Get All Users
 **GET** `/users`
-**Query Params**: `?role=pilgrim` or `?role=moderator`
+
+**Description**: Fetches all users from both User (admins/moderators) and Pilgrim collections.
+
+**Query Params**: 
+- `?role=pilgrim` - Only pilgrims
+- `?role=moderator` - Only moderators  
+- `?role=admin` - Only admins
+- No param - All users (pilgrims, moderators, admins)
+
+**Output**:
+```json
+{
+  "success": true,
+  "count": 150,
+  "data": [
+    {
+      "_id": "user_id",
+      "full_name": "User Name",
+      "email": "user@example.com",
+      "role": "moderator",
+      "phone_number": "+966500000000",
+      "active": true
+    },
+    {
+      "_id": "pilgrim_id",
+      "full_name": "Pilgrim Name",
+      "email": "pilgrim@example.com",
+      "national_id": "1234567890",
+      "role": "pilgrim",
+      "phone_number": "+966500000001",
+      "email_verified": true
+    }
+  ]
+}
+```
 
 ### Soft Delete User (Deactivate)
 **DELETE** `/users/:id` or `/moderators/:id`
@@ -146,7 +200,7 @@ User must have `role: 'admin'`.
   "stats": {
     "total_users": 100,
     "moderators": 10,
-    "users_as_pilgrims": 90,
+    "pilgrims": 90,
     "groups": 5,
     "pending_moderator_requests": 2
   }

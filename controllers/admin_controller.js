@@ -98,7 +98,7 @@ exports.create_moderator = async (req, res) => {
 exports.get_request_moderators = async (req, res) => {
     try {
         const requests = await ModeratorRequest.find({ status: 'pending' })
-            .populate('user_id', 'full_name email phone_number')
+            .populate('pilgrim_id', 'full_name email phone_number national_id email_verified')
             .sort({ created_at: -1 });
         res.json({ success: true, count: requests.length, data: requests });
     } catch (err) {
@@ -114,22 +114,60 @@ exports.approve_moderator_request = async (req, res) => {
         const request = await ModeratorRequest.findById(id);
         if (!request) return res.status(404).json({ success: false, message: 'Request not found' });
 
-        if (request.status === 'approved') return res.status(400).json({ success: false, message: 'Request already approved' });
+        if (request.status === 'approved') {
+            return res.status(400).json({ success: false, message: 'Request already approved' });
+        }
 
-        const user = await User.findById(request.user_id);
-        if (!user) return res.status(404).json({ success: false, message: 'User associated with request not found' });
+        const pilgrim = await Pilgrim.findById(request.pilgrim_id);
+        if (!pilgrim) {
+            return res.status(404).json({ success: false, message: 'Pilgrim not found' });
+        }
 
-        // Update Request
+        // Verify email is verified
+        if (!pilgrim.email_verified) {
+            return res.status(400).json({
+                success: false,
+                message: 'Pilgrim email must be verified before approval'
+            });
+        }
+
+        // Check if User entry already exists (shouldn't happen, but safety check)
+        const existingUser = await User.findById(pilgrim._id);
+        if (existingUser) {
+            // Just update the role
+            existingUser.role = 'moderator';
+            await existingUser.save();
+        } else {
+            // Create User entry for moderator
+            const newModerator = new User({
+                _id: pilgrim._id, // Use same ID
+                full_name: pilgrim.full_name,
+                email: pilgrim.email,
+                password: pilgrim.password,
+                phone_number: pilgrim.phone_number,
+                role: 'moderator',
+                active: true
+            });
+
+            await newModerator.save();
+        }
+
+        // Update pilgrim role
+        pilgrim.role = 'moderator';
+        await pilgrim.save();
+
+        // Update request
         request.status = 'approved';
         request.updated_at = Date.now();
         await request.save();
 
-        // Update User Role
-        user.role = 'moderator';
-        await user.save();
-
-        res.json({ success: true, message: 'User approved as Moderator', user: user.full_name });
+        res.json({
+            success: true,
+            message: 'Pilgrim approved as Moderator',
+            user: pilgrim.full_name
+        });
     } catch (err) {
+        console.error('Approve moderator error:', err);
         res.status(500).json({ success: false, message: err.message });
     }
 };
@@ -155,13 +193,24 @@ exports.reject_moderator_request = async (req, res) => {
 exports.soft_delete_user = async (req, res) => {
     try {
         const { id } = req.params;
-        const user = await User.findById(id);
-        if (!user) return res.status(404).json({ success: false, message: 'User not found' });
+
+        // Try to find in User collection first
+        let user = await User.findById(id);
+
+        // If not found in User, try Pilgrim collection
+        if (!user) {
+            user = await Pilgrim.findById(id);
+        }
+
+        if (!user) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
 
         user.active = false;
         await user.save();
         res.json({ success: true, message: 'User deactivated (Soft Delete)' });
     } catch (err) {
+        console.error('Soft delete error:', err);
         res.status(500).json({ success: false, message: err.message });
     }
 };
@@ -170,14 +219,25 @@ exports.soft_delete_user = async (req, res) => {
 exports.hard_delete_user = async (req, res) => {
     try {
         const { id } = req.params;
-        const result = await User.findByIdAndDelete(id);
-        if (!result) return res.status(404).json({ success: false, message: 'User not found' });
+
+        // Try to delete from User collection first
+        let result = await User.findByIdAndDelete(id);
+
+        // If not found in User, try Pilgrim collection
+        if (!result) {
+            result = await Pilgrim.findByIdAndDelete(id);
+        }
+
+        if (!result) {
+            return res.status(404).json({ success: false, message: 'User not found' });
+        }
 
         // Cleanup associated Data (Optional but recommended)
-        // await ModeratorRequest.deleteMany({ user_id: id });
+        await ModeratorRequest.deleteMany({ pilgrim_id: id });
 
         res.json({ success: true, message: 'User permanently deleted' });
     } catch (err) {
+        console.error('Hard delete error:', err);
         res.status(500).json({ success: false, message: err.message });
     }
 };
@@ -199,9 +259,7 @@ exports.get_stats = async (req, res) => {
     try {
         const totalUsers = await User.countDocuments();
         const moderators = await User.countDocuments({ role: 'moderator' });
-        const pilgrims = await User.countDocuments({ role: 'pilgrim' }); // Note: detailed pilgrims are in Pilgrim model usually? 
-        // User model distinguishes roles. Pilgrim model contains EXTRA data for pilgrims. 
-        // Sync check: Does every Pilgrim entry have a User entry? Yes usually.
+        const pilgrims = await Pilgrim.countDocuments(); // Count from Pilgrim collection
 
         const activeGroups = await Group.countDocuments();
         const pendingRequests = await ModeratorRequest.countDocuments({ status: 'pending' });
@@ -211,7 +269,7 @@ exports.get_stats = async (req, res) => {
             stats: {
                 total_users: totalUsers,
                 moderators,
-                users_as_pilgrims: pilgrims,
+                pilgrims: pilgrims,
                 groups: activeGroups,
                 pending_moderator_requests: pendingRequests
             }
@@ -225,10 +283,27 @@ exports.get_stats = async (req, res) => {
 exports.get_all_users = async (req, res) => {
     try {
         const { role } = req.query;
-        let query = {};
-        if (role) query.role = role;
+        let users = [];
 
-        const users = await User.find(query).select('-password');
+        if (!role) {
+            // Fetch all: admins, moderators from User, and pilgrims from Pilgrim
+            const usersFromUserCollection = await User.find().select('-password');
+            const pilgrims = await Pilgrim.find().select('-password');
+
+            users = [...usersFromUserCollection, ...pilgrims];
+        } else if (role === 'pilgrim') {
+            // Fetch only pilgrims from Pilgrim collection
+            users = await Pilgrim.find().select('-password');
+        } else if (role === 'moderator' || role === 'admin') {
+            // Fetch moderators/admins from User collection
+            users = await User.find({ role }).select('-password');
+        } else {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid role. Use: pilgrim, moderator, or admin'
+            });
+        }
+
         res.json({ success: true, count: users.length, data: users });
 
     } catch (err) {
