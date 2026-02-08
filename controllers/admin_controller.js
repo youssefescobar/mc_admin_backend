@@ -131,32 +131,29 @@ exports.approve_moderator_request = async (req, res) => {
             });
         }
 
-        // Check if User entry already exists (shouldn't happen, but safety check)
-        const existingUser = await User.findById(pilgrim._id);
-        if (existingUser) {
-            // Just update the role
-            existingUser.role = 'moderator';
-            await existingUser.save();
-        } else {
-            // Create User entry for moderator
-            const newModerator = new User({
-                _id: pilgrim._id, // Use same ID
-                full_name: pilgrim.full_name,
-                email: pilgrim.email,
-                password: pilgrim.password,
-                phone_number: pilgrim.phone_number,
-                role: 'moderator',
-                active: true
-            });
+        // Create a new User (Moderator) document with pilgrim's data
+        const newModerator = new User({
+            full_name: pilgrim.full_name,
+            email: pilgrim.email,
+            password: pilgrim.password, // Already hashed
+            phone_number: pilgrim.phone_number,
+            national_id: pilgrim.national_id,
+            role: 'moderator',
+            active: true,
+            profile_picture: pilgrim.profile_picture,
+            location: pilgrim.location,
+            medical_history: pilgrim.medical_history,
+            age: pilgrim.age,
+            gender: pilgrim.gender,
+            email_verified: pilgrim.email_verified
+        });
 
-            await newModerator.save();
-        }
+        await newModerator.save();
 
-        // Update pilgrim role
-        pilgrim.role = 'moderator';
-        await pilgrim.save();
+        // Delete the pilgrim document
+        await Pilgrim.findByIdAndDelete(pilgrim._id);
 
-        // Update request
+        // Update request status
         request.status = 'approved';
         request.updated_at = Date.now();
         await request.save();
